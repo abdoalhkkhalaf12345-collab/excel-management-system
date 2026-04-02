@@ -1,0 +1,362 @@
+﻿@model List<Abdullhak_Khalaf.Models.AppFile>
+
+@{
+    ViewData["Title"] = "لوحة التحكم";
+    var isAdmin = ViewBag.IsAdmin != null && (bool)ViewBag.IsAdmin;
+}
+
+<div class="dashboard-page">
+    <div class="dashboard-main">
+        <div class="hero-card">
+            <h1>لوحة التحكم الرئيسية</h1>
+            <p>
+                مرحباً بك، يمكنك من هنا رفع ملفات Excel و CSV، تعديلها، تصديرها إلى PDF، وإدارتها بسهولة.
+                @if (isAdmin)
+                {
+                    <span class="admin-note">أنت الآن في وضع المدير وتشاهد جميع الملفات.</span>
+                }
+            </p>
+        </div>
+
+        <div class="content-card">
+            <div class="section-title">
+                <span>⬆️</span>
+                <h2>رفع ملف جديد</h2>
+            </div>
+
+            <form method="post" enctype="multipart/form-data" asp-controller="Home" asp-action="Upload" class="upload-form" id="uploadForm">
+                @Html.AntiForgeryToken()
+
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-zone-content">
+                        <div class="drop-icon">📁</div>
+                        <h4>اسحب الملف هنا أو اضغط للاختيار</h4>
+                        <p>الأنواع المدعومة: Excel و CSV</p>
+                        <input type="file" name="UploadFile" id="fileInput" accept=".xlsx,.xls,.csv" class="d-none" required />
+                        <div class="selected-file" id="selectedFileName">لم يتم اختيار ملف بعد</div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success modern-btn">رفع الملف</button>
+            </form>
+        </div>
+
+        <div class="content-card">
+            <div class="section-title">
+                <span>📂</span>
+                <h2>@(isAdmin ? "جميع الملفات" : "ملفاتي")</h2>
+            </div>
+
+            @if (Model.Any())
+            {
+                <div class="files-grid">
+                    @foreach (var file in Model)
+                    {
+                        <div class="file-card">
+                            <div class="file-name">@file.OriginalFileName</div>
+                            <div class="file-meta">النوع: @file.FileType.ToUpper()</div>
+                            <div class="file-meta">الحجم: @(Math.Round(file.FileSizeBytes / 1024.0, 2)) KB</div>
+                            <div class="file-meta">تاريخ الرفع: @file.UploadedAt.ToLocalTime().ToString("yyyy-MM-dd hh:mm tt")</div>
+                            @if (isAdmin)
+                            {
+                                <div class="owner-badge">صاحب الملف: @file.OwnerUserId</div>
+                            }
+
+                            <div class="file-actions">
+                                <a asp-controller="Home" asp-action="DownloadFile" asp-route-id="@file.Id" class="btn btn-outline-success btn-sm">تحميل</a>
+                                <a asp-controller="Home" asp-action="EditFile" asp-route-id="@file.Id" class="btn btn-primary btn-sm">تعديل أونلاين</a>
+                                <a asp-controller="Home" asp-action="ExportPdf" asp-route-id="@file.Id" class="btn btn-outline-dark btn-sm">PDF</a>
+                                <button type="button" class="btn btn-outline-danger btn-sm deleteFile" data-id="@file.Id">حذف</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">لا توجد ملفات لعرضها حالياً.</div>
+            }
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        const dropZone = document.getElementById("dropZone");
+        const fileInput = document.getElementById("fileInput");
+        const selectedFileName = document.getElementById("selectedFileName");
+
+        dropZone.addEventListener("click", () => fileInput.click());
+
+        fileInput.addEventListener("change", function () {
+            if (this.files.length > 0) {
+                selectedFileName.textContent = this.files[0].name;
+            } else {
+                selectedFileName.textContent = "لم يتم اختيار ملف بعد";
+            }
+        });
+
+        ["dragenter", "dragover"].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                dropZone.classList.add("drag-over");
+            });
+        });
+
+        ["dragleave", "drop"].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                dropZone.classList.remove("drag-over");
+            });
+        });
+
+        dropZone.addEventListener("drop", e => {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                fileInput.files = files;
+                selectedFileName.textContent = files[0].name;
+            }
+        });
+
+        document.querySelectorAll(".deleteFile").forEach(btn => {
+            btn.addEventListener("click", function () {
+                const id = this.getAttribute("data-id");
+
+                if (!confirm("هل تريد حذف هذا الملف؟")) return;
+
+                fetch(`/Home/DeleteFile?id=${encodeURIComponent(id)}`, {
+                    method: "POST"
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        location.reload();
+                    } else {
+                        showLocalToast(result.message || "فشل حذف الملف.", "error");
+                    }
+                })
+                .catch(() => {
+                    showLocalToast("حدث خطأ أثناء حذف الملف.", "error");
+                });
+            });
+        });
+
+        function showLocalToast(message, type) {
+            const container = document.createElement("div");
+            container.className = `custom-local-toast ${type}`;
+            container.textContent = message;
+            document.body.appendChild(container);
+
+            setTimeout(() => {
+                container.style.opacity = "0";
+                setTimeout(() => container.remove(), 300);
+            }, 2500);
+        }
+    </script>
+}
+
+<style>
+    body {
+        background: #f4f7fb;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+    }
+
+    .dashboard-page {
+        padding: 30px;
+    }
+
+    .dashboard-main {
+        max-width: 1280px;
+        margin: auto;
+    }
+
+    .hero-card {
+        background: linear-gradient(135deg, #2563eb, #1e40af);
+        color: white;
+        padding: 32px;
+        border-radius: 22px;
+        margin-bottom: 25px;
+        box-shadow: 0 10px 30px rgba(37, 99, 235, 0.18);
+    }
+
+        .hero-card h1 {
+            margin: 0 0 10px;
+            font-size: 38px;
+            font-weight: 800;
+        }
+
+        .hero-card p {
+            margin: 0;
+            font-size: 18px;
+            opacity: .95;
+        }
+
+    .admin-note {
+        display: inline-block;
+        margin-right: 10px;
+        background: rgba(255,255,255,.2);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 14px;
+    }
+
+    .content-card {
+        background: white;
+        border-radius: 18px;
+        padding: 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    .section-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+        .section-title h2 {
+            margin: 0;
+            font-size: 28px;
+            color: #1e3a8a;
+            font-weight: 800;
+        }
+
+    .upload-form {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+
+    .drop-zone {
+        border: 2px dashed #93c5fd;
+        background: #f8fbff;
+        border-radius: 18px;
+        padding: 34px 20px;
+        text-align: center;
+        cursor: pointer;
+        transition: .25s;
+    }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            background: #eff6ff;
+            border-color: #2563eb;
+            transform: translateY(-2px);
+        }
+
+    .drop-zone-content h4 {
+        font-weight: 800;
+        margin-bottom: 10px;
+        color: #0f172a;
+    }
+
+    .drop-zone-content p {
+        color: #64748b;
+        margin-bottom: 12px;
+    }
+
+    .drop-icon {
+        font-size: 42px;
+        margin-bottom: 12px;
+    }
+
+    .selected-file {
+        background: white;
+        border-radius: 12px;
+        padding: 10px 14px;
+        display: inline-block;
+        border: 1px solid #dbeafe;
+        color: #1e3a8a;
+        font-weight: 700;
+    }
+
+    .modern-btn {
+        width: fit-content;
+        border-radius: 12px;
+        padding: 10px 24px;
+        font-weight: 700;
+    }
+
+    .files-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+        gap: 16px;
+    }
+
+    .file-card {
+        background: #f8fbff;
+        border: 1px solid #dbeafe;
+        border-radius: 16px;
+        padding: 18px;
+        transition: 0.25s;
+    }
+
+        .file-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 20px rgba(30, 64, 175, 0.08);
+        }
+
+    .file-name {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 10px;
+        word-break: break-word;
+    }
+
+    .file-meta {
+        color: #64748b;
+        font-size: 14px;
+        margin-bottom: 6px;
+    }
+
+    .owner-badge {
+        margin-top: 8px;
+        margin-bottom: 12px;
+        display: inline-block;
+        background: #e0f2fe;
+        color: #075985;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .file-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+    }
+
+    .empty-state {
+        background: #f8fafc;
+        border: 1px dashed #cbd5e1;
+        padding: 25px;
+        border-radius: 14px;
+        text-align: center;
+        color: #64748b;
+        font-size: 17px;
+    }
+
+    .custom-local-toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 99999;
+        color: white;
+        padding: 14px 18px;
+        border-radius: 16px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+        transition: .3s;
+    }
+
+        .custom-local-toast.success {
+            background: #16a34a;
+        }
+
+        .custom-local-toast.error {
+            background: #dc2626;
+        }
+</style>

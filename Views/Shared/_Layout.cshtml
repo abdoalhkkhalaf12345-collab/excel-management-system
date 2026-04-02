@@ -1,0 +1,151 @@
+﻿@using Microsoft.AspNetCore.Identity
+@inject SignInManager<IdentityUser> SignInManager
+@inject UserManager<IdentityUser> UserManager
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - Abdullhak_Khalaf</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.rtl.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+            body {
+                background: #f4f7fb;
+                font-family: "Segoe UI", Tahoma, sans-serif;
+            }
+
+            .main-navbar {
+                background: linear-gradient(135deg, #0f172a, #1e3a8a);
+                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+            }
+
+            .navbar-brand, .nav-link, .navbar-text {
+                color: #fff !important;
+            }
+
+            .navbar-brand {
+                font-weight: 800;
+                font-size: 22px;
+            }
+
+            .user-badge {
+                background: rgba(255,255,255,.14);
+                color: #fff;
+                padding: 8px 14px;
+                border-radius: 999px;
+                font-weight: 700;
+                margin-left: 10px;
+            }
+
+            .logout-btn {
+                border-radius: 999px;
+                padding: 8px 16px;
+                font-weight: 700;
+            }
+
+            .toast-container-custom {
+                position: fixed;
+                top: 20px;
+                left: 20px;
+                z-index: 9999;
+            }
+
+            .custom-toast {
+                min-width: 280px;
+                padding: 14px 18px;
+                border-radius: 16px;
+                color: #fff;
+                box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+                margin-bottom: 10px;
+                animation: fadeSlide 0.35s ease;
+            }
+
+            .custom-toast.success {
+                background: linear-gradient(135deg, #16a34a, #15803d);
+            }
+
+            .custom-toast.error {
+                background: linear-gradient(135deg, #dc2626, #b91c1c);
+            }
+
+            .custom-toast.info {
+                background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            }
+
+            @@keyframes fadeSlide {
+                from { opacity: 0; transform: translateY(-10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="navbar navbar-expand-sm navbar-dark main-navbar mb-4">
+            <div class="container-fluid px-4">
+                <a class="navbar-brand" asp-controller="Home" asp-action="Index">نظام إدارة الملفات</a>
+
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
+                    <ul class="navbar-nav me-auto"></ul>
+
+                    <ul class="navbar-nav align-items-center">
+                        @if (SignInManager.IsSignedIn(User))
+                        {
+                            <li class="nav-item">
+                                <span class="user-badge">
+                                    @User.Identity?.Name
+                                    @if (User.IsInRole("Admin"))
+                                    {
+                                        <span> - مدير</span>
+                                    }
+                                </span>
+                            </li>
+                            <li class="nav-item">
+                                <form class="d-inline" asp-area="Identity" asp-page="/Account/Logout" asp-route-returnUrl="/Identity/Account/Login" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button type="submit" class="btn btn-light logout-btn">تسجيل خروج</button>
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div class="toast-container-custom">
+        @if (TempData["ToastMessage"] != null)
+        {
+            var toastType = TempData["ToastType"]?.ToString() ?? "info";
+            <div class="custom-toast @toastType" id="mainToast">
+                @TempData["ToastMessage"]
+            </div>
+        }
+    </div>
+
+    <div class="container-fluid">
+        <main role="main" class="pb-4">
+            @RenderBody()
+        </main>
+    </div>
+
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+            setTimeout(function () {
+                const toast = document.getElementById("mainToast");
+                if (toast) {
+                    toast.style.opacity = "0";
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 3000);
+    </script>
+
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

@@ -1,0 +1,477 @@
+﻿@model Abdullhak_Khalaf.Models.ExcelEditorViewModel
+
+@{
+    ViewData["Title"] = "تعديل الملف";
+}
+
+<div class="editor-page">
+    <input type="hidden" id="currentFileId" value="@Model.FileId" />
+    <input type="hidden" id="currentSheetName" value="@Model.SheetName" />
+
+    <div class="editor-header">
+        <div>
+            <h1>تعديل الملف: @Model.FileName</h1>
+            <p>
+                ابحث داخل الجدول، عدّل الخلايا، احذف الصفوف، ثم احفظ التغييرات أو صدّر إلى PDF.
+                <span class="auto-save-status" id="autoSaveStatus">الحفظ التلقائي: جاهز</span>
+            </p>
+        </div>
+
+        <div class="editor-actions">
+            <a asp-controller="Home" asp-action="DownloadFile" asp-route-id="@Model.FileId" class="btn btn-success btn-lg">تحميل الملف</a>
+            <a asp-controller="Home" asp-action="ExportPdf" asp-route-id="@Model.FileId" asp-route-sheetName="@Model.SheetName" class="btn btn-dark btn-lg">تصدير PDF</a>
+            <button type="button" class="btn btn-primary btn-lg" onclick="saveExcel(true)">حفظ التعديلات</button>
+            <a asp-controller="Home" asp-action="Index" class="btn btn-outline-secondary btn-lg">العودة</a>
+        </div>
+    </div>
+
+    <div class="sheet-tabs">
+        @foreach (var sheet in Model.SheetNames)
+        {
+            var isActive = sheet == Model.SheetName;
+            <a asp-controller="Home"
+                   asp-action="EditFile"
+                   asp-route-id="@Model.FileId"
+                   asp-route-sheetName="@sheet"
+                   class="sheet-tab @(isActive ? "active" : "")">
+                @sheet
+            </a>
+        }
+    </div>
+
+    <div class="toolbar-card">
+        <input type="text" id="tableSearch" class="form-control search-input" placeholder="ابحث داخل الجدول..." onkeyup="filterTable()" />
+        <button type="button" class="btn btn-outline-primary" onclick="addRow()">إضافة صف</button>
+        <button type="button" class="btn btn-outline-dark" onclick="addColumn()">إضافة عمود</button>
+        <span class="sheet-info">الورقة الحالية: <strong>@Model.SheetName</strong></span>
+    </div>
+
+    <div id="saveMessage"></div>
+
+    <div class="table-card">
+        <div class="table-responsive">
+            <table class="excel-table" id="excelTable">
+                <thead>
+                    <tr>
+                        <th class="row-number">#</th>
+                        @for (int i = 0; i < Model.Headers.Count; i++)
+                        {
+                            <th contenteditable="true" class="editable-header">@Model.Headers[i]</th>
+                        }
+                        <th class="actions-column">إجراءات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int i = 0; i < Model.Rows.Count; i++)
+                    {
+                        <tr>
+                            <td class="row-number">@(i + 1)</td>
+                            @for (int j = 0; j < Model.Headers.Count; j++)
+                            {
+                                var cellValue = j < Model.Rows[i].Count ? Model.Rows[i][j] : "";
+                                <td contenteditable="true">@cellValue</td>
+                            }
+                            <td class="actions-column">
+                                <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteRow(this)">حذف الصف</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        let hasUnsavedChanges = false;
+        let autoSaveRunning = false;
+
+        function markDirty() {
+            hasUnsavedChanges = true;
+            document.getElementById("autoSaveStatus").textContent = "الحفظ التلقائي: توجد تغييرات غير محفوظة";
+        }
+
+        function filterTable() {
+            const input = document.getElementById("tableSearch");
+            const filter = input.value.toLowerCase();
+            const rows = document.querySelectorAll("#excelTable tbody tr");
+
+            rows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                row.style.display = text.includes(filter) ? "" : "none";
+            });
+        }
+
+        function refreshRowNumbers() {
+            const rows = document.querySelectorAll("#excelTable tbody tr");
+            let index = 1;
+            rows.forEach(row => {
+                const numberCell = row.querySelector(".row-number");
+                if (numberCell) {
+                    numberCell.textContent = index++;
+                }
+            });
+        }
+
+        function addRow() {
+            const tbody = document.querySelector("#excelTable tbody");
+            const headerCount = document.querySelectorAll("#excelTable thead th.editable-header").length;
+
+            const newRow = document.createElement("tr");
+            let html = `<td class="row-number"></td>`;
+
+            for (let i = 0; i < headerCount; i++) {
+                html += `<td contenteditable="true"></td>`;
+            }
+
+            html += `<td class="actions-column">
+                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteRow(this)">حذف الصف</button>
+                     </td>`;
+
+            newRow.innerHTML = html;
+            tbody.appendChild(newRow);
+
+            refreshRowNumbers();
+            markDirty();
+        }
+
+        function addColumn() {
+            const theadRow = document.querySelector("#excelTable thead tr");
+            const actionHeader = document.querySelector("#excelTable thead .actions-column");
+
+            const newHeader = document.createElement("th");
+            newHeader.contentEditable = "true";
+            newHeader.className = "editable-header";
+            newHeader.textContent = "عمود جديد";
+            theadRow.insertBefore(newHeader, actionHeader);
+
+            const bodyRows = document.querySelectorAll("#excelTable tbody tr");
+            bodyRows.forEach(row => {
+                const actionCell = row.querySelector(".actions-column");
+                const newCell = document.createElement("td");
+                newCell.contentEditable = "true";
+                row.insertBefore(newCell, actionCell);
+            });
+
+            markDirty();
+        }
+
+        function deleteRow(button) {
+            if (!confirm("هل تريد حذف هذا الصف؟")) return;
+            const row = button.closest("tr");
+            row.remove();
+            refreshRowNumbers();
+            markDirty();
+        }
+
+        async function saveExcel(showToast = false) {
+            if (autoSaveRunning) return;
+
+            const fileId = parseInt(document.getElementById("currentFileId").value);
+            const sheetName = document.getElementById("currentSheetName").value;
+            const table = document.getElementById("excelTable");
+            const headers = [];
+            const rows = [];
+
+            const headerCells = table.querySelectorAll("thead th.editable-header");
+            headerCells.forEach(cell => headers.push(cell.innerText.trim()));
+
+            const bodyRows = table.querySelectorAll("tbody tr");
+            bodyRows.forEach(row => {
+                const rowData = [];
+                const cells = row.querySelectorAll("td");
+                cells.forEach((cell, index) => {
+                    const isRowNumber = index === 0;
+                    const isActionsColumn = cell.classList.contains("actions-column");
+                    if (!isRowNumber && !isActionsColumn) {
+                        rowData.push(cell.innerText.trim());
+                    }
+                });
+                rows.push(rowData);
+            });
+
+            const payload = {
+                fileId: fileId,
+                sheetName: sheetName,
+                headers: headers,
+                rows: rows
+            };
+
+            try {
+                autoSaveRunning = true;
+                document.getElementById("autoSaveStatus").textContent = "الحفظ التلقائي: جاري الحفظ...";
+
+                const response = await fetch("/Home/SaveEditedExcel", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    hasUnsavedChanges = false;
+                    document.getElementById("autoSaveStatus").textContent = "الحفظ التلقائي: تم الحفظ";
+                    document.getElementById("saveMessage").innerHTML =
+                        `<div class="save-alert success">${result.message}</div>`;
+
+                    if (showToast) showToastMessage("تم حفظ التعديلات بنجاح", "success");
+                } else {
+                    document.getElementById("autoSaveStatus").textContent = "الحفظ التلقائي: فشل الحفظ";
+                    document.getElementById("saveMessage").innerHTML =
+                        `<div class="save-alert error">${result.message}</div>`;
+                    if (showToast) showToastMessage(result.message || "فشل الحفظ", "error");
+                }
+            } catch {
+                document.getElementById("autoSaveStatus").textContent = "الحفظ التلقائي: حدث خطأ";
+                document.getElementById("saveMessage").innerHTML =
+                    `<div class="save-alert error">حدث خطأ أثناء الحفظ.</div>`;
+                if (showToast) showToastMessage("حدث خطأ أثناء الحفظ", "error");
+            } finally {
+                autoSaveRunning = false;
+            }
+        }
+
+        function showToastMessage(message, type) {
+            const toast = document.createElement("div");
+            toast.className = `custom-local-toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = "0";
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+
+        document.addEventListener("input", function (e) {
+            if (e.target.closest("#excelTable")) {
+                markDirty();
+            }
+        });
+
+        setInterval(() => {
+            if (hasUnsavedChanges && !autoSaveRunning) {
+                saveExcel(false);
+            }
+        }, 10000);
+
+        refreshRowNumbers();
+    </script>
+}
+
+<style>
+    body {
+        background: #f1f5f9;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+    }
+
+    .editor-page {
+        max-width: 1450px;
+        margin: 30px auto;
+        padding: 0 20px 30px;
+    }
+
+    .editor-header {
+        background: linear-gradient(135deg, #1d4ed8, #1e3a8a);
+        color: white;
+        border-radius: 22px;
+        padding: 28px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+        flex-wrap: wrap;
+        box-shadow: 0 12px 28px rgba(29, 78, 216, 0.18);
+        margin-bottom: 20px;
+    }
+
+        .editor-header h1 {
+            margin: 0 0 8px;
+            font-size: 34px;
+            font-weight: 800;
+        }
+
+        .editor-header p {
+            margin: 0;
+            font-size: 17px;
+            opacity: .95;
+        }
+
+    .auto-save-status {
+        display: inline-block;
+        margin-right: 12px;
+        background: rgba(255,255,255,.16);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    .editor-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .sheet-tabs {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+
+    .sheet-tab {
+        background: white;
+        border: 1px solid #cbd5e1;
+        color: #0f172a;
+        padding: 10px 18px;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 700;
+        transition: .2s;
+    }
+
+        .sheet-tab:hover {
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .sheet-tab.active {
+            background: #1d4ed8;
+            color: white;
+            border-color: #1d4ed8;
+        }
+
+    .toolbar-card {
+        background: white;
+        border-radius: 18px;
+        padding: 16px 18px;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+
+    .search-input {
+        min-width: 280px;
+        max-width: 360px;
+        border-radius: 12px;
+    }
+
+    .sheet-info {
+        margin-inline-start: auto;
+        color: #334155;
+        font-size: 15px;
+    }
+
+    .table-card {
+        background: white;
+        border-radius: 22px;
+        padding: 18px;
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+        overflow: hidden;
+    }
+
+    .excel-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        min-width: 1000px;
+    }
+
+        .excel-table thead th {
+            position: sticky;
+            top: 0;
+            background: linear-gradient(180deg, #2563eb, #1d4ed8);
+            color: white;
+            font-weight: 800;
+            text-align: center;
+            padding: 14px 12px;
+            border: 1px solid #1e40af;
+            z-index: 2;
+        }
+
+        .excel-table td {
+            background: #ffffff;
+            padding: 12px;
+            border: 1px solid #e2e8f0;
+            min-width: 140px;
+            color: #0f172a;
+            transition: background .2s, box-shadow .2s;
+            vertical-align: middle;
+        }
+
+        .excel-table tbody tr:nth-child(even) td {
+            background: #f8fbff;
+        }
+
+        .excel-table td:focus,
+        .excel-table th[contenteditable="true"]:focus {
+            outline: none;
+            background: #fff7ed !important;
+            box-shadow: inset 0 0 0 2px #f59e0b;
+        }
+
+    .editable-header {
+        cursor: text;
+    }
+
+    .row-number {
+        background: #e2e8f0 !important;
+        color: #0f172a !important;
+        font-weight: 700;
+        text-align: center;
+        min-width: 60px !important;
+        width: 60px;
+    }
+
+    .actions-column {
+        min-width: 130px !important;
+        text-align: center;
+    }
+
+    .save-alert {
+        border-radius: 14px;
+        padding: 14px 18px;
+        margin-bottom: 16px;
+        font-weight: 700;
+    }
+
+        .save-alert.success {
+            background: #ecfdf5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+
+        .save-alert.error {
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+    .custom-local-toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 99999;
+        color: white;
+        padding: 14px 18px;
+        border-radius: 16px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+        transition: .3s;
+    }
+
+        .custom-local-toast.success {
+            background: #16a34a;
+        }
+
+        .custom-local-toast.error {
+            background: #dc2626;
+        }
+</style>
