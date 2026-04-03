@@ -1,0 +1,159 @@
+﻿@model List<Abdullhak_Khalaf.Models.FileVersion>
+@using Abdullhak_Khalaf.Models
+
+@{
+    ViewData["Title"] = "سجل النسخ";
+    var file = ViewBag.File as AppFile;
+}
+
+<div class="versions-page">
+    <div class="versions-header-card">
+        <div>
+            <h1>سجل النسخ</h1>
+            <p>الملف: <strong>@(file?.OriginalFileName ?? "-")</strong></p>
+            <p>المالك: <strong>@(file?.OwnerFullName ?? "-") (@(file?.OwnerUserName ?? "-"))</strong></p>
+        </div>
+
+        <div>
+            <a asp-controller="Home" asp-action="Index" class="btn btn-outline-light">رجوع</a>
+            @if (file != null)
+            {
+                <a asp-controller="Home" asp-action="EditFile" asp-route-id="@file.Id" class="btn btn-primary">فتح الملف</a>
+            }
+        </div>
+    </div>
+
+    <div class="versions-card">
+        @Html.AntiForgeryToken()
+
+        @if (Model.Any())
+        {
+            <div class="table-responsive">
+                <table class="table premium-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>النسخة</th>
+                            <th>تاريخ الإنشاء</th>
+                            <th>أنشأها</th>
+                            <th>الحجم</th>
+                            <th>الإجراء</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var version in Model)
+                        {
+                            <tr>
+                                <td>@version.VersionLabel</td>
+                                <td>@version.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd hh:mm tt")</td>
+                                <td>@version.CreatedByFullName (@version.CreatedByUserName)</td>
+                                <td>@(Math.Round(version.FileSizeBytes / 1024.0, 2)) KB</td>
+                                <td>
+                                    <button type="button" class="btn btn-outline-warning btn-sm restoreVersion" data-id="@version.Id">
+                                        استرجاع هذه النسخة
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <div class="empty-state">لا توجد نسخ محفوظة لهذا الملف بعد.</div>
+        }
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        document.querySelectorAll(".restoreVersion").forEach(btn => {
+            btn.addEventListener("click", function () {
+                const versionId = this.getAttribute("data-id");
+                const token = document.querySelector('input[name="__RequestVerificationToken"]').value;
+
+                if (!confirm("هل تريد استرجاع هذه النسخة؟ سيتم حفظ نسخة من الملف الحالي أولاً.")) return;
+
+                fetch(`/Home/RestoreVersion?versionId=${encodeURIComponent(versionId)}`, {
+                    method: "POST",
+                    headers: {
+                        "RequestVerificationToken": token
+                    }
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        alert(result.message || "تم الاسترجاع بنجاح.");
+                        location.reload();
+                    } else {
+                        alert(result.message || "فشل الاسترجاع.");
+                    }
+                })
+                .catch(() => {
+                    alert("حدث خطأ أثناء الاسترجاع.");
+                });
+            });
+        });
+    </script>
+}
+
+<style>
+    .versions-page {
+        padding: 24px;
+        color: #e2e8f0;
+    }
+
+    .versions-header-card,
+    .versions-card {
+        background: rgba(15,23,42,.88);
+        border-radius: 20px;
+        padding: 24px;
+        box-shadow: 0 16px 32px rgba(0,0,0,.20);
+        border: 1px solid rgba(255,255,255,.08);
+        margin-bottom: 24px;
+    }
+
+    .versions-header-card {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+        .versions-header-card h1 {
+            color: #f8fafc;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .versions-header-card p {
+            color: #cbd5e1;
+            margin-bottom: 6px;
+        }
+
+    .premium-table thead th {
+        background: linear-gradient(180deg, #1e293b, #0f172a);
+        color: #f8fafc;
+        border: 1px solid rgba(255,255,255,.08);
+        text-align: center;
+    }
+
+    .premium-table tbody td {
+        background: rgba(15,23,42,.72);
+        color: #e2e8f0;
+        border: 1px solid rgba(255,255,255,.06);
+        text-align: center;
+        vertical-align: middle;
+    }
+
+    .empty-state {
+        background: rgba(30,41,59,.8);
+        border: 1px dashed rgba(148,163,184,.45);
+        padding: 25px;
+        border-radius: 14px;
+        text-align: center;
+        color: #94a3b8;
+        font-size: 17px;
+    }
+</style>

@@ -2,490 +2,778 @@ using Abdullhak_Khalaf.Data;
 using Abdullhak_Khalaf.Models;
 using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Security.Claims;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace Abdullhak_Khalaf.Controllers
 {
     [Authorize]
     public class HomeController : Controller
     {
-        private readonly IWebHostEnvironment _env;
         private readonly ApplicationDbContext _context;
-        private readonly UserManager<IdentityUser> _userManager;
-        private readonly string[] _allowedExtensions = new[] { ".xls", ".xlsx", ".csv" };
+        private readonly UserManager<ApplicationUser> _userManager;
+        private readonly SignInManager<ApplicationUser> _signInManager;
+        private readonly IWebHostEnvironment _environment;
+
+        private const long MaxFileSize = 10 * 1024 * 1024;
+        private readonly string[] AllowedExtensions = { ".xlsx", ".csv" };
 
         public HomeController(
-            IWebHostEnvironment env,
             ApplicationDbContext context,
-            UserManager<IdentityUser> userManager)
+            UserManager<ApplicationUser> userManager,
+            SignInManager<ApplicationUser> signInManager,
+            IWebHostEnvironment environment)
         {
-            _env = env;
             _context = context;
             _userManager = userManager;
+            _signInManager = signInManager;
+            _environment = environment;
         }
 
-        private string GetUploadsPath()
+        public async Task<IActionResult> Index(string? search)
         {
-            var uploadPath = Path.Combine(_env.WebRootPath, "uploads");
+            var userId = _userManager.GetUserId(User);
+            var isAdmin = User.IsInRole("Admin");
 
-            if (!Directory.Exists(uploadPath))
-                Directory.CreateDirectory(uploadPath);
+            var query = _context.AppFiles.AsQueryable();
 
-            return uploadPath;
-        }
+            if (!isAdmin)
+                query = query.Where(f => f.OwnerUserId == userId);
 
-        private string GetCurrentUserId()
-        {
-            return User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
-        }
+            var files = await query
+                .OrderByDescending(f => f.UploadedAt)
+                .ToListAsync();
 
-        private bool IsAdmin()
-        {
-            return User.IsInRole("Admin");
-        }
-
-        private async Task<AppFile?> GetAccessibleFileAsync(int id)
-        {
-            var userId = GetCurrentUserId();
-
-            if (IsAdmin())
+            if (!string.IsNullOrWhiteSpace(search))
             {
-                return await _context.AppFiles.FirstOrDefaultAsync(f => f.Id == id);
+                search = search.Trim().ToLower();
+
+                var filtered = new List<AppFile>();
+
+                foreach (var file in files)
+                {
+                    var matchedMeta =
+                        file.OriginalFileName.ToLower().Contains(search) ||
+                        file.FileType.ToLower().Contains(search) ||
+                        file.OwnerFullName.ToLower().Contains(search) ||
+                        file.OwnerUserName.ToLower().Contains(search) ||
+                        file.OwnerEmail.ToLower().Contains(search);
+
+                    if (matchedMeta)
+                    {
+                        filtered.Add(file);
+                        continue;
+                    }
+
+                    var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+                    if (!System.IO.File.Exists(filePath))
+                        continue;
+
+                    bool contentMatched = file.FileType.ToLower() == "csv"
+                        ? CsvContainsText(filePath, search)
+                        : ExcelContainsText(filePath, search);
+
+                    if (contentMatched)
+                        filtered.Add(file);
+                }
+
+                files = filtered.OrderByDescending(f => f.UploadedAt).ToList();
             }
 
-            return await _context.AppFiles.FirstOrDefaultAsync(f => f.Id == id && f.OwnerUserId == userId);
-        }
+            ViewBag.IsAdmin = isAdmin;
+            ViewBag.Search = search ?? "";
 
-        public async Task<IActionResult> Index()
-        {
-            ViewData["Title"] = "لوحة التحكم";
-
-            List<AppFile> files;
-
-            if (IsAdmin())
-            {
-                files = await _context.AppFiles
-                    .OrderByDescending(f => f.UploadedAt)
-                    .ToListAsync();
-
-                ViewBag.IsAdmin = true;
-            }
-            else
-            {
-                var userId = GetCurrentUserId();
-
-                files = await _context.AppFiles
-                    .Where(f => f.OwnerUserId == userId)
-                    .OrderByDescending(f => f.UploadedAt)
-                    .ToListAsync();
-
-                ViewBag.IsAdmin = false;
-            }
-
-            return View(files);
+            return View("Index", files);
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Upload(IFormFile UploadFile)
+        public async Task<IActionResult> Upload(List<IFormFile> uploadFiles)
         {
-            if (UploadFile == null || UploadFile.Length == 0)
+            if (uploadFiles == null || uploadFiles.Count == 0)
             {
-                TempData["ToastType"] = "error";
-                TempData["ToastMessage"] = "الرجاء اختيار ملف صالح.";
-                return RedirectToAction("Index");
+                TempData["Error"] = "يرجى اختيار ملف واحد على الأقل.";
+                return RedirectToAction(nameof(Index));
             }
 
-            var originalFileName = Path.GetFileName(UploadFile.FileName).Trim();
-            var extension = Path.GetExtension(originalFileName).ToLowerInvariant();
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Challenge();
 
-            if (!_allowedExtensions.Contains(extension))
+            var uploadsFolder = Path.Combine(_environment.WebRootPath, "uploads");
+            if (!Directory.Exists(uploadsFolder))
+                Directory.CreateDirectory(uploadsFolder);
+
+            int uploadedCount = 0;
+            var errors = new List<string>();
+
+            foreach (var uploadFile in uploadFiles)
             {
-                TempData["ToastType"] = "error";
-                TempData["ToastMessage"] = "يسمح فقط بملفات Excel و CSV.";
-                return RedirectToAction("Index");
-            }
-
-            var uploadsPath = GetUploadsPath();
-            string storedFileName;
-            string fileType;
-            long fileSize = UploadFile.Length;
-
-            if (extension == ".csv")
-            {
-                storedFileName = $"{Guid.NewGuid()}.xlsx";
-                fileType = "csv";
-
-                var filePath = Path.Combine(uploadsPath, storedFileName);
-
-                using var stream = UploadFile.OpenReadStream();
-                using var reader = new StreamReader(stream, Encoding.UTF8);
-                var content = await reader.ReadToEndAsync();
-
-                var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                                   .Where(x => !string.IsNullOrWhiteSpace(x))
-                                   .ToList();
-
-                using var workbook = new XLWorkbook();
-                var worksheet = workbook.Worksheets.Add("Sheet1");
-
-                for (int rowIndex = 0; rowIndex < lines.Count; rowIndex++)
+                if (uploadFile == null || uploadFile.Length == 0)
                 {
-                    var columns = ParseCsvLine(lines[rowIndex]);
-
-                    for (int colIndex = 0; colIndex < columns.Count; colIndex++)
-                    {
-                        worksheet.Cell(rowIndex + 1, colIndex + 1).Value = columns[colIndex];
-                    }
+                    errors.Add("تم تجاهل ملف فارغ.");
+                    continue;
                 }
 
-                worksheet.Columns().AdjustToContents();
+                if (uploadFile.Length > MaxFileSize)
+                {
+                    errors.Add($"الملف {uploadFile.FileName} أكبر من 10MB.");
+                    continue;
+                }
+
+                var extension = Path.GetExtension(uploadFile.FileName).ToLowerInvariant();
+                if (!AllowedExtensions.Contains(extension))
+                {
+                    errors.Add($"الملف {uploadFile.FileName} نوعه غير مدعوم.");
+                    continue;
+                }
+
+                var storedFileName = $"{Guid.NewGuid()}{extension}";
+                var filePath = Path.Combine(uploadsFolder, storedFileName);
+
+                using (var stream = new FileStream(filePath, FileMode.Create))
+                {
+                    await uploadFile.CopyToAsync(stream);
+                }
+
+                var appFile = new AppFile
+                {
+                    OriginalFileName = uploadFile.FileName,
+                    StoredFileName = storedFileName,
+                    OwnerUserId = user.Id,
+                    OwnerEmail = user.Email ?? "",
+                    OwnerUserName = user.UserName ?? "",
+                    OwnerFullName = user.FullName ?? "",
+                    FileType = extension.Replace(".", ""),
+                    FileSizeBytes = uploadFile.Length,
+                    UploadedAt = DateTime.UtcNow
+                };
+
+                _context.AppFiles.Add(appFile);
+                uploadedCount++;
+            }
+
+            await _context.SaveChangesAsync();
+
+            if (uploadedCount > 0)
+                TempData["Success"] = $"تم رفع {uploadedCount} ملف بنجاح.";
+
+            if (errors.Any())
+                TempData["Error"] = string.Join(" | ", errors);
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> CreateEmptyExcel(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+                fileName = "NewFile.xlsx";
+
+            if (!fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+                fileName += ".xlsx";
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Challenge();
+
+            var uploadsFolder = Path.Combine(_environment.WebRootPath, "uploads");
+            if (!Directory.Exists(uploadsFolder))
+                Directory.CreateDirectory(uploadsFolder);
+
+            var storedFileName = $"{Guid.NewGuid()}.xlsx";
+            var filePath = Path.Combine(uploadsFolder, storedFileName);
+
+            using (var workbook = new XLWorkbook())
+            {
+                var sheet = workbook.Worksheets.Add("Sheet1");
+                sheet.Cell(1, 1).Value = "العمود 1";
+                sheet.Cell(1, 2).Value = "العمود 2";
+                sheet.Cell(1, 3).Value = "العمود 3";
+                sheet.Columns().AdjustToContents();
                 workbook.SaveAs(filePath);
             }
-            else
-            {
-                storedFileName = $"{Guid.NewGuid()}{extension}";
-                fileType = extension.Replace(".", "");
-                var filePath = Path.Combine(uploadsPath, storedFileName);
 
-                using var fileStream = new FileStream(filePath, FileMode.Create);
-                await UploadFile.CopyToAsync(fileStream);
-            }
+            var fileInfo = new FileInfo(filePath);
 
             var appFile = new AppFile
             {
-                OriginalFileName = originalFileName,
+                OriginalFileName = fileName,
                 StoredFileName = storedFileName,
-                OwnerUserId = GetCurrentUserId(),
-                FileType = fileType,
-                FileSizeBytes = fileSize,
+                OwnerUserId = user.Id,
+                OwnerEmail = user.Email ?? "",
+                OwnerUserName = user.UserName ?? "",
+                OwnerFullName = user.FullName ?? "",
+                FileType = "xlsx",
+                FileSizeBytes = fileInfo.Length,
                 UploadedAt = DateTime.UtcNow
             };
 
             _context.AppFiles.Add(appFile);
             await _context.SaveChangesAsync();
 
-            TempData["ToastType"] = "success";
-            TempData["ToastMessage"] = "تم رفع الملف بنجاح.";
-            return RedirectToAction("Index");
-        }
-
-        public async Task<IActionResult> EditFile(int id, string? sheetName = null)
-        {
-            var fileRecord = await GetAccessibleFileAsync(id);
-
-            if (fileRecord == null)
-                return NotFound("الملف غير موجود أو ليس لديك صلاحية الوصول إليه.");
-
-            var filePath = Path.Combine(GetUploadsPath(), fileRecord.StoredFileName);
-
-            if (!System.IO.File.Exists(filePath))
-                return NotFound("الملف غير موجود على الخادم.");
-
-            using var workbook = new XLWorkbook(filePath);
-
-            var allSheetNames = workbook.Worksheets.Select(w => w.Name).ToList();
-            var selectedSheetName = string.IsNullOrWhiteSpace(sheetName)
-                ? workbook.Worksheet(1).Name
-                : sheetName;
-
-            if (!allSheetNames.Contains(selectedSheetName))
-                selectedSheetName = workbook.Worksheet(1).Name;
-
-            var worksheet = workbook.Worksheet(selectedSheetName);
-            var usedRange = worksheet.RangeUsed();
-
-            var model = new ExcelEditorViewModel
-            {
-                FileId = fileRecord.Id,
-                FileName = fileRecord.OriginalFileName,
-                SheetName = selectedSheetName,
-                SheetNames = allSheetNames,
-                IsAdminView = IsAdmin()
-            };
-
-            if (usedRange == null)
-                return View(model);
-
-            int lastRow = usedRange.RowCount();
-            int lastColumn = usedRange.ColumnCount();
-
-            for (int col = 1; col <= lastColumn; col++)
-            {
-                model.Headers.Add(worksheet.Cell(1, col).GetValue<string>());
-            }
-
-            for (int row = 2; row <= lastRow; row++)
-            {
-                var rowData = new List<string>();
-
-                for (int col = 1; col <= lastColumn; col++)
-                {
-                    rowData.Add(worksheet.Cell(row, col).GetValue<string>());
-                }
-
-                model.Rows.Add(rowData);
-            }
-
-            return View(model);
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> SaveEditedExcel([FromBody] ExcelSaveRequest request)
-        {
-            if (request == null || request.FileId <= 0 || string.IsNullOrWhiteSpace(request.SheetName))
-            {
-                return BadRequest(new { success = false, message = "البيانات غير مكتملة." });
-            }
-
-            var fileRecord = await GetAccessibleFileAsync(request.FileId);
-
-            if (fileRecord == null)
-            {
-                return NotFound(new { success = false, message = "الملف غير موجود أو لا تملك صلاحية الوصول إليه." });
-            }
-
-            var filePath = Path.Combine(GetUploadsPath(), fileRecord.StoredFileName);
-
-            if (!System.IO.File.Exists(filePath))
-            {
-                return NotFound(new { success = false, message = "الملف غير موجود على الخادم." });
-            }
-
-            using var workbook = new XLWorkbook(filePath);
-
-            if (!workbook.Worksheets.Any(w => w.Name == request.SheetName))
-            {
-                return NotFound(new { success = false, message = "الورقة المحددة غير موجودة." });
-            }
-
-            var worksheet = workbook.Worksheet(request.SheetName);
-            worksheet.Clear();
-
-            for (int col = 0; col < request.Headers.Count; col++)
-            {
-                worksheet.Cell(1, col + 1).Value = request.Headers[col];
-                worksheet.Cell(1, col + 1).Style.Font.Bold = true;
-                worksheet.Cell(1, col + 1).Style.Fill.BackgroundColor = XLColor.FromHtml("#1D4ED8");
-                worksheet.Cell(1, col + 1).Style.Font.FontColor = XLColor.White;
-            }
-
-            for (int row = 0; row < request.Rows.Count; row++)
-            {
-                for (int col = 0; col < request.Rows[row].Count; col++)
-                {
-                    worksheet.Cell(row + 2, col + 1).Value = request.Rows[row][col];
-                }
-            }
-
-            worksheet.Columns().AdjustToContents();
-            workbook.Save();
-
-            return Json(new { success = true, message = "تم حفظ التعديلات بنجاح." });
+            TempData["Success"] = "تم إنشاء ملف Excel جديد.";
+            return RedirectToAction(nameof(Index));
         }
 
         public async Task<IActionResult> DownloadFile(int id)
         {
-            var fileRecord = await GetAccessibleFileAsync(id);
+            var file = await GetAllowedFile(id);
+            if (file == null)
+                return NotFound();
 
-            if (fileRecord == null)
-                return NotFound("الملف غير موجود أو لا تملك صلاحية الوصول إليه.");
-
-            var filePath = Path.Combine(GetUploadsPath(), fileRecord.StoredFileName);
-
+            var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
             if (!System.IO.File.Exists(filePath))
-                return NotFound("الملف غير موجود على الخادم.");
+                return NotFound("الملف غير موجود.");
 
-            var extension = Path.GetExtension(fileRecord.StoredFileName).ToLowerInvariant();
-            var contentType = extension == ".xls"
-                ? "application/vnd.ms-excel"
-                : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            if (file.FileType.ToLower() == "csv")
+                return PhysicalFile(filePath, "text/csv", file.OriginalFileName);
 
-            return PhysicalFile(filePath, contentType, fileRecord.OriginalFileName);
+            var model = ReadExcelFile(file, filePath);
+            var bytes = BuildCleanExcelBytes(model);
+            return File(
+                bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                EnsureXlsxName(file.OriginalFileName));
+        }
+
+        public async Task<IActionResult> EditFile(int id)
+        {
+            var file = await GetAllowedFile(id);
+            if (file == null)
+                return NotFound();
+
+            var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+            if (!System.IO.File.Exists(filePath))
+                return NotFound("الملف غير موجود.");
+
+            ExcelEditorViewModel model = file.FileType.ToLower() == "csv"
+                ? ReadCsvFile(file, filePath)
+                : ReadExcelFile(file, filePath);
+
+            model.IsAdminView = User.IsInRole("Admin");
+
+            return View("EditFile", model);
         }
 
         [HttpPost]
-        public async Task<IActionResult> DeleteFile(int id)
+        public async Task<IActionResult> SaveEditedFile([FromBody] ExcelSaveRequest request)
         {
-            var fileRecord = await GetAccessibleFileAsync(id);
+            if (request == null)
+                return Json(new { success = false, message = "البيانات المرسلة غير صحيحة." });
 
-            if (fileRecord == null)
-                return NotFound(new { success = false, message = "الملف غير موجود أو لا تملك صلاحية الوصول إليه." });
+            var file = await GetAllowedFile(request.FileId);
+            if (file == null)
+                return Json(new { success = false, message = "الملف غير موجود أو ليس لديك صلاحية." });
 
-            var filePath = Path.Combine(GetUploadsPath(), fileRecord.StoredFileName);
+            var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+            if (!System.IO.File.Exists(filePath))
+                return Json(new { success = false, message = "الملف غير موجود على السيرفر." });
 
-            if (System.IO.File.Exists(filePath))
-                System.IO.File.Delete(filePath);
+            try
+            {
+                await CreateVersionBackupAsync(file);
 
-            _context.AppFiles.Remove(fileRecord);
-            await _context.SaveChangesAsync();
+                if (file.FileType.ToLower() == "csv")
+                    SaveCsvFile(filePath, request);
+                else
+                    SaveExcelFile(filePath, request);
 
-            return Ok(new { success = true, message = "تم حذف الملف بنجاح." });
+                var fileInfo = new FileInfo(filePath);
+                file.FileSizeBytes = fileInfo.Length;
+                file.LastModifiedAt = DateTime.UtcNow;
+
+                _context.AppFiles.Update(file);
+                await _context.SaveChangesAsync();
+
+                return Json(new { success = true, message = "تم حفظ التعديلات بنجاح." });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = $"خطأ أثناء الحفظ: {ex.Message}" });
+            }
         }
 
-        public async Task<IActionResult> ExportPdf(int id, string? sheetName = null)
+        public async Task<IActionResult> ExportPdf(int id)
         {
-            var fileRecord = await GetAccessibleFileAsync(id);
+            var file = await GetAllowedFile(id);
+            if (file == null)
+                return NotFound();
 
-            if (fileRecord == null)
-                return NotFound("الملف غير موجود أو لا تملك صلاحية الوصول إليه.");
-
-            var filePath = Path.Combine(GetUploadsPath(), fileRecord.StoredFileName);
-
+            var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
             if (!System.IO.File.Exists(filePath))
-                return NotFound("الملف غير موجود على الخادم.");
+                return NotFound("الملف غير موجود.");
 
-            using var workbook = new XLWorkbook(filePath);
-
-            var selectedSheetName = string.IsNullOrWhiteSpace(sheetName)
-                ? workbook.Worksheet(1).Name
-                : sheetName;
-
-            if (!workbook.Worksheets.Any(w => w.Name == selectedSheetName))
-                selectedSheetName = workbook.Worksheet(1).Name;
-
-            var worksheet = workbook.Worksheet(selectedSheetName);
-            var usedRange = worksheet.RangeUsed();
-
-            var headers = new List<string>();
-            var rows = new List<List<string>>();
-
-            if (usedRange != null)
-            {
-                int lastRow = usedRange.RowCount();
-                int lastColumn = usedRange.ColumnCount();
-
-                for (int col = 1; col <= lastColumn; col++)
-                {
-                    headers.Add(worksheet.Cell(1, col).GetValue<string>());
-                }
-
-                for (int row = 2; row <= lastRow; row++)
-                {
-                    var rowData = new List<string>();
-                    for (int col = 1; col <= lastColumn; col++)
-                    {
-                        rowData.Add(worksheet.Cell(row, col).GetValue<string>());
-                    }
-                    rows.Add(rowData);
-                }
-            }
+            var data = file.FileType.ToLower() == "csv"
+                ? ReadCsvFile(file, filePath)
+                : ReadExcelFile(file, filePath);
 
             var pdfBytes = Document.Create(container =>
             {
                 container.Page(page =>
                 {
-                    page.Size(PageSizes.A4.Landscape());
+                    page.Size(PageSizes.A3.Landscape());
                     page.Margin(20);
-                    page.DefaultTextStyle(x => x.FontSize(10));
+                    page.DefaultTextStyle(x => x.FontSize(9));
 
                     page.Header().Column(col =>
                     {
-                        col.Item().Text($"اسم الملف: {fileRecord.OriginalFileName}").Bold().FontSize(16);
-                        col.Item().Text($"اسم الورقة: {selectedSheetName}");
+                        col.Item().AlignRight().Text($"تصدير الملف: {file.OriginalFileName}").SemiBold().FontSize(18);
+                        col.Item().AlignRight().Text($"النوع: {file.FileType.ToUpper()}");
+                        col.Item().AlignRight().Text($"المالك: {file.OwnerFullName} ({file.OwnerUserName})");
+                        col.Item().AlignRight().Text($"تاريخ الرفع: {file.UploadedAt:yyyy-MM-dd HH:mm}");
+                        if (file.LastModifiedAt.HasValue)
+                            col.Item().AlignRight().Text($"آخر تعديل: {file.LastModifiedAt.Value:yyyy-MM-dd HH:mm}");
                     });
 
-                    page.Content().PaddingVertical(10).Table(table =>
+                    page.Content().PaddingTop(15).Table(table =>
                     {
-                        int columnsCount = Math.Max(headers.Count, 1);
+                        int colCount = Math.Max(1, data.Headers.Count);
 
                         table.ColumnsDefinition(columns =>
                         {
-                            for (int i = 0; i < columnsCount; i++)
+                            for (int i = 0; i < colCount; i++)
                                 columns.RelativeColumn();
                         });
 
-                        if (headers.Any())
+                        foreach (var header in data.Headers)
                         {
-                            foreach (var header in headers)
-                            {
-                                table.Cell().Background("#1D4ED8").Padding(6).Text(header).FontColor(Colors.White).Bold();
-                            }
-
-                            foreach (var row in rows)
-                            {
-                                foreach (var cell in row)
-                                {
-                                    table.Cell().Border(1).BorderColor("#D1D5DB").Padding(5).Text(cell ?? string.Empty);
-                                }
-                            }
+                            table.Cell()
+                                .Background("#E2E8F0")
+                                .Border(1)
+                                .BorderColor("#CBD5E1")
+                                .PaddingVertical(6)
+                                .PaddingHorizontal(4)
+                                .AlignCenter()
+                                .Text(header ?? "")
+                                .SemiBold();
                         }
-                        else
+
+                        foreach (var row in data.Rows)
                         {
-                            table.Cell().Border(1).Padding(6).Text("لا توجد بيانات داخل هذه الورقة.");
+                            for (int i = 0; i < colCount; i++)
+                            {
+                                var cellValue = i < row.Count ? row[i] : "";
+                                table.Cell()
+                                    .Border(1)
+                                    .BorderColor("#E2E8F0")
+                                    .PaddingVertical(5)
+                                    .PaddingHorizontal(4)
+                                    .AlignCenter()
+                                    .Text(cellValue ?? "");
+                            }
                         }
                     });
 
-                    page.Footer().AlignCenter().Text("تم إنشاء الملف من النظام");
+                    page.Footer().AlignCenter().Text($"تم الإنشاء بتاريخ {DateTime.Now:yyyy-MM-dd HH:mm}");
                 });
             }).GeneratePdf();
 
-            var pdfName = Path.GetFileNameWithoutExtension(fileRecord.OriginalFileName) + ".pdf";
-            return File(pdfBytes, "application/pdf", pdfName);
+            return File(pdfBytes, "application/pdf", Path.GetFileNameWithoutExtension(file.OriginalFileName) + ".pdf");
         }
 
-        private static List<string> ParseCsvLine(string line)
+        public async Task<IActionResult> Versions(int id)
         {
-            var result = new List<string>();
-            if (string.IsNullOrEmpty(line))
-            {
-                result.Add(string.Empty);
-                return result;
-            }
+            var file = await GetAllowedFile(id);
+            if (file == null)
+                return NotFound();
 
-            var current = new StringBuilder();
-            bool inQuotes = false;
+            var versions = await _context.FileVersions
+                .Where(v => v.AppFileId == id)
+                .OrderByDescending(v => v.CreatedAt)
+                .ToListAsync();
 
-            for (int i = 0; i < line.Length; i++)
-            {
-                char c = line[i];
-
-                if (c == '"')
-                {
-                    if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
-                    {
-                        current.Append('"');
-                        i++;
-                    }
-                    else
-                    {
-                        inQuotes = !inQuotes;
-                    }
-                }
-                else if (c == ',' && !inQuotes)
-                {
-                    result.Add(current.ToString());
-                    current.Clear();
-                }
-                else
-                {
-                    current.Append(c);
-                }
-            }
-
-            result.Add(current.ToString());
-            return result;
+            ViewBag.File = file;
+            return View("Versions", versions);
         }
 
-        [AllowAnonymous]
-        public IActionResult Error()
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> RestoreVersion(int versionId)
         {
-            return View();
+            var version = await _context.FileVersions.FirstOrDefaultAsync(v => v.Id == versionId);
+            if (version == null)
+                return Json(new { success = false, message = "النسخة غير موجودة." });
+
+            var file = await GetAllowedFile(version.AppFileId);
+            if (file == null)
+                return Json(new { success = false, message = "الملف غير موجود أو ليس لديك صلاحية." });
+
+            var currentPath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+            var versionPath = Path.Combine(_environment.WebRootPath, "versions", version.StoredFileName);
+
+            if (!System.IO.File.Exists(versionPath))
+                return Json(new { success = false, message = "ملف النسخة غير موجود على السيرفر." });
+
+            await CreateVersionBackupAsync(file);
+
+            System.IO.File.Copy(versionPath, currentPath, true);
+
+            var fileInfo = new FileInfo(currentPath);
+            file.FileSizeBytes = fileInfo.Length;
+            file.LastModifiedAt = DateTime.UtcNow;
+
+            _context.AppFiles.Update(file);
+            await _context.SaveChangesAsync();
+
+            return Json(new { success = true, message = "تم استرجاع النسخة بنجاح." });
+        }
+
+        [HttpGet]
+        public IActionResult DeleteMyAccount()
+        {
+            return View("DeleteMyAccount", new DeleteAccountViewModel());
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> DeleteMyAccount(DeleteAccountViewModel model)
+        {
+            if (!ModelState.IsValid)
+                return View("DeleteMyAccount", model);
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return RedirectToAction(nameof(Index));
+
+            var passwordOk = await _userManager.CheckPasswordAsync(user, model.Password);
+            if (!passwordOk)
+            {
+                ModelState.AddModelError(string.Empty, "كلمة المرور غير صحيحة.");
+                return View("DeleteMyAccount", model);
+            }
+
+            var userFiles = await _context.AppFiles
+                .Where(f => f.OwnerUserId == user.Id)
+                .ToListAsync();
+
+            var userFileIds = userFiles.Select(f => f.Id).ToList();
+
+            var userVersions = await _context.FileVersions
+                .Where(v => userFileIds.Contains(v.AppFileId))
+                .ToListAsync();
+
+            var uploadsFolder = Path.Combine(_environment.WebRootPath, "uploads");
+            var versionsFolder = Path.Combine(_environment.WebRootPath, "versions");
+
+            foreach (var file in userFiles)
+            {
+                var filePath = Path.Combine(uploadsFolder, file.StoredFileName);
+                if (System.IO.File.Exists(filePath))
+                    System.IO.File.Delete(filePath);
+            }
+
+            foreach (var version in userVersions)
+            {
+                var versionPath = Path.Combine(versionsFolder, version.StoredFileName);
+                if (System.IO.File.Exists(versionPath))
+                    System.IO.File.Delete(versionPath);
+            }
+
+            _context.FileVersions.RemoveRange(userVersions);
+            _context.AppFiles.RemoveRange(userFiles);
+            await _context.SaveChangesAsync();
+
+            await _signInManager.SignOutAsync();
+
+            var deleteResult = await _userManager.DeleteAsync(user);
+            if (!deleteResult.Succeeded)
+            {
+                foreach (var error in deleteResult.Errors)
+                    ModelState.AddModelError(string.Empty, error.Description);
+
+                return View("DeleteMyAccount", model);
+            }
+
+            TempData["Success"] = "تم حذف الحساب وجميع ملفاتك بنجاح.";
+            return Redirect("/Identity/Account/Login");
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> DeleteFile(int id)
+        {
+            var file = await GetAllowedFile(id);
+            if (file == null)
+                return Json(new { success = false, message = "الملف غير موجود أو لا تملك صلاحية." });
+
+            try
+            {
+                var filePath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+                if (System.IO.File.Exists(filePath))
+                    System.IO.File.Delete(filePath);
+
+                var versions = await _context.FileVersions.Where(v => v.AppFileId == file.Id).ToListAsync();
+                foreach (var version in versions)
+                {
+                    var versionPath = Path.Combine(_environment.WebRootPath, "versions", version.StoredFileName);
+                    if (System.IO.File.Exists(versionPath))
+                        System.IO.File.Delete(versionPath);
+                }
+
+                _context.FileVersions.RemoveRange(versions);
+                _context.AppFiles.Remove(file);
+                await _context.SaveChangesAsync();
+
+                return Json(new { success = true, message = "تم حذف الملف بنجاح." });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = $"فشل حذف الملف: {ex.Message}" });
+            }
+        }
+
+        public IActionResult Privacy() => View();
+
+        public IActionResult Error() => View();
+
+        private async Task<AppFile?> GetAllowedFile(int id)
+        {
+            var file = await _context.AppFiles.FirstOrDefaultAsync(f => f.Id == id);
+            if (file == null)
+                return null;
+
+            var userId = _userManager.GetUserId(User);
+            var isAdmin = User.IsInRole("Admin");
+
+            if (!isAdmin && file.OwnerUserId != userId)
+                return null;
+
+            return file;
+        }
+
+        private async Task CreateVersionBackupAsync(AppFile file)
+        {
+            var currentPath = Path.Combine(_environment.WebRootPath, "uploads", file.StoredFileName);
+            if (!System.IO.File.Exists(currentPath))
+                return;
+
+            var versionsFolder = Path.Combine(_environment.WebRootPath, "versions");
+            if (!Directory.Exists(versionsFolder))
+                Directory.CreateDirectory(versionsFolder);
+
+            var ext = Path.GetExtension(file.StoredFileName);
+            var versionStoredFileName = $"{Guid.NewGuid()}{ext}";
+            var versionPath = Path.Combine(versionsFolder, versionStoredFileName);
+
+            System.IO.File.Copy(currentPath, versionPath, true);
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return;
+
+            var versionCount = await _context.FileVersions.CountAsync(v => v.AppFileId == file.Id);
+
+            var version = new FileVersion
+            {
+                AppFileId = file.Id,
+                StoredFileName = versionStoredFileName,
+                VersionLabel = $"نسخة {versionCount + 1}",
+                CreatedAt = DateTime.UtcNow,
+                CreatedByUserId = user.Id,
+                CreatedByUserName = user.UserName ?? "",
+                CreatedByFullName = user.FullName ?? "",
+                FileSizeBytes = new FileInfo(versionPath).Length
+            };
+
+            _context.FileVersions.Add(version);
+            await _context.SaveChangesAsync();
+        }
+
+        private bool ExcelContainsText(string filePath, string search)
+        {
+            using var workbook = new XLWorkbook(filePath);
+            var sheet = workbook.Worksheet(1);
+            var range = sheet.RangeUsed();
+            if (range == null)
+                return false;
+
+            foreach (var cell in range.Cells())
+            {
+                var text = cell.GetValue<string>() ?? "";
+                if (text.ToLower().Contains(search))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool CsvContainsText(string filePath, string search)
+        {
+            foreach (var line in System.IO.File.ReadLines(filePath, Encoding.UTF8))
+            {
+                if ((line ?? "").ToLower().Contains(search))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private ExcelEditorViewModel ReadExcelFile(AppFile file, string filePath)
+        {
+            using var workbook = new XLWorkbook(filePath);
+            var sheet = workbook.Worksheet(1);
+            var range = sheet.RangeUsed();
+
+            var headers = new List<string>();
+            var rows = new List<List<string>>();
+
+            if (range != null)
+            {
+                int firstRow = range.FirstRow().RowNumber();
+                int lastRow = range.LastRow().RowNumber();
+                int firstCol = range.FirstColumn().ColumnNumber();
+                int lastCol = range.LastColumn().ColumnNumber();
+
+                for (int col = firstCol; col <= lastCol; col++)
+                    headers.Add(sheet.Cell(firstRow, col).GetValue<string>() ?? "");
+
+                for (int row = firstRow + 1; row <= lastRow; row++)
+                {
+                    var rowData = new List<string>();
+                    bool hasAnyValue = false;
+
+                    for (int col = firstCol; col <= lastCol; col++)
+                    {
+                        var value = sheet.Cell(row, col).GetValue<string>() ?? "";
+                        if (!string.IsNullOrWhiteSpace(value))
+                            hasAnyValue = true;
+
+                        rowData.Add(value);
+                    }
+
+                    if (hasAnyValue)
+                        rows.Add(rowData);
+                }
+            }
+
+            return new ExcelEditorViewModel
+            {
+                FileId = file.Id,
+                FileName = file.OriginalFileName,
+                OriginalFileName = file.OriginalFileName,
+                SheetName = sheet.Name,
+                FileType = file.FileType,
+                IsCsv = false,
+                Headers = headers,
+                Rows = rows
+            };
+        }
+
+        private ExcelEditorViewModel ReadCsvFile(AppFile file, string filePath)
+        {
+            var lines = System.IO.File.ReadAllLines(filePath, Encoding.UTF8).ToList();
+
+            var headers = new List<string>();
+            var rows = new List<List<string>>();
+
+            if (lines.Count > 0)
+            {
+                headers = SplitCsvLine(lines[0]);
+                for (int i = 1; i < lines.Count; i++)
+                {
+                    var row = SplitCsvLine(lines[i]);
+                    if (row.All(string.IsNullOrWhiteSpace))
+                        continue;
+
+                    rows.Add(row);
+                }
+            }
+
+            return new ExcelEditorViewModel
+            {
+                FileId = file.Id,
+                FileName = file.OriginalFileName,
+                OriginalFileName = file.OriginalFileName,
+                SheetName = "CSV",
+                FileType = file.FileType,
+                IsCsv = true,
+                Headers = headers,
+                Rows = rows
+            };
+        }
+
+        private void SaveExcelFile(string filePath, ExcelSaveRequest request)
+        {
+            using var workbook = new XLWorkbook();
+            var sheetName = string.IsNullOrWhiteSpace(request.SheetName) ? "Sheet1" : request.SheetName;
+            var sheet = workbook.Worksheets.Add(sheetName);
+
+            for (int c = 0; c < request.Headers.Count; c++)
+                sheet.Cell(1, c + 1).Value = request.Headers[c] ?? "";
+
+            for (int r = 0; r < request.Rows.Count; r++)
+            {
+                for (int c = 0; c < request.Rows[r].Count; c++)
+                    sheet.Cell(r + 2, c + 1).Value = request.Rows[r][c] ?? "";
+            }
+
+            sheet.Columns().AdjustToContents();
+            workbook.SaveAs(filePath);
+        }
+
+        private void SaveCsvFile(string filePath, ExcelSaveRequest request)
+        {
+            var lines = new List<string>
+            {
+                string.Join(",", request.Headers.Select(EscapeCsv))
+            };
+
+            foreach (var row in request.Rows)
+                lines.Add(string.Join(",", row.Select(EscapeCsv)));
+
+            System.IO.File.WriteAllLines(filePath, lines, Encoding.UTF8);
+        }
+
+        private byte[] BuildCleanExcelBytes(ExcelEditorViewModel model)
+        {
+            using var workbook = new XLWorkbook();
+            var sheetName = string.IsNullOrWhiteSpace(model.SheetName) ? "Sheet1" : model.SheetName;
+            var sheet = workbook.Worksheets.Add(sheetName);
+
+            for (int c = 0; c < model.Headers.Count; c++)
+                sheet.Cell(1, c + 1).Value = model.Headers[c] ?? "";
+
+            for (int r = 0; r < model.Rows.Count; r++)
+            {
+                for (int c = 0; c < model.Rows[r].Count; c++)
+                    sheet.Cell(r + 2, c + 1).Value = model.Rows[r][c] ?? "";
+            }
+
+            sheet.Columns().AdjustToContents();
+
+            using var ms = new MemoryStream();
+            workbook.SaveAs(ms);
+            return ms.ToArray();
+        }
+
+        private List<string> SplitCsvLine(string line)
+        {
+            return line.Split(',').Select(x => x.Trim()).ToList();
+        }
+
+        private string EscapeCsv(string value)
+        {
+            value ??= string.Empty;
+            if (value.Contains(",") || value.Contains("\"") || value.Contains("\n"))
+                return $"\"{value.Replace("\"", "\"\"")}\"";
+
+            return value;
+        }
+
+        private string EnsureXlsxName(string fileName)
+        {
+            var ext = Path.GetExtension(fileName);
+            if (string.Equals(ext, ".xlsx", StringComparison.OrdinalIgnoreCase))
+                return fileName;
+
+            return Path.GetFileNameWithoutExtension(fileName) + ".xlsx";
         }
     }
 }

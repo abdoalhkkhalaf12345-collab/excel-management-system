@@ -1,151 +1,133 @@
-﻿@using Microsoft.AspNetCore.Identity
-@inject SignInManager<IdentityUser> SignInManager
-@inject UserManager<IdentityUser> UserManager
-
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - Abdullhak_Khalaf</title>
+    <title>@ViewData["Title"] - Excel Pro Manager</title>
+
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.rtl.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+
     <style>
+            :root {
+                --bg-1: #020617;
+                --bg-2: #0f172a;
+                --bg-3: #111827;
+                --card: rgba(15, 23, 42, 0.82);
+                --card-border: rgba(255,255,255,.08);
+                --text-main: #f8fafc;
+                --text-soft: #cbd5e1;
+                --text-muted: #94a3b8;
+                --primary: #2563eb;
+                --primary-2: #0ea5e9;
+            }
+
+            html, body {
+                min-height: 100%;
+            }
+
             body {
-                background: #f4f7fb;
+                margin: 0;
+                background: radial-gradient(circle at top right, rgba(59,130,246,.10), transparent 30%), radial-gradient(circle at bottom left, rgba(14,165,233,.08), transparent 30%), linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3));
+                color: var(--text-main);
                 font-family: "Segoe UI", Tahoma, sans-serif;
             }
 
             .main-navbar {
-                background: linear-gradient(135deg, #0f172a, #1e3a8a);
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+                background: rgba(2,6,23,.90);
+                backdrop-filter: blur(12px);
+                border-bottom: 1px solid rgba(255,255,255,.06);
+                box-shadow: 0 10px 25px rgba(0,0,0,.18);
             }
 
-            .navbar-brand, .nav-link, .navbar-text {
-                color: #fff !important;
-            }
+                .main-navbar .navbar-brand,
+                .main-navbar .nav-link,
+                .main-navbar .navbar-text {
+                    color: #f8fafc !important;
+                    font-weight: 700;
+                }
+
+                    .main-navbar .nav-link:hover {
+                        color: #93c5fd !important;
+                    }
 
             .navbar-brand {
-                font-weight: 800;
-                font-size: 22px;
+                font-size: 1.6rem;
             }
 
-            .user-badge {
-                background: rgba(255,255,255,.14);
-                color: #fff;
-                padding: 8px 14px;
-                border-radius: 999px;
-                font-weight: 700;
-                margin-left: 10px;
+            main {
+                min-height: calc(100vh - 132px);
+                padding-top: 30px;
+                padding-bottom: 40px;
             }
 
-            .logout-btn {
-                border-radius: 999px;
-                padding: 8px 16px;
-                font-weight: 700;
+            .main-page-wrapper {
+                width: 100%;
+                max-width: 1400px;
+                margin: 0 auto;
+                padding-left: 18px;
+                padding-right: 18px;
             }
 
-            .toast-container-custom {
-                position: fixed;
-                top: 20px;
-                left: 20px;
-                z-index: 9999;
+            footer {
+                background: rgba(2,6,23,.92);
+                border-top: 1px solid rgba(255,255,255,.06);
+                padding: 14px 0;
+                color: var(--text-muted);
+                text-align: center;
             }
 
-            .custom-toast {
-                min-width: 280px;
-                padding: 14px 18px;
-                border-radius: 16px;
-                color: #fff;
-                box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
-                margin-bottom: 10px;
-                animation: fadeSlide 0.35s ease;
+            .btn,
+            .form-control {
+                box-shadow: none !important;
             }
 
-            .custom-toast.success {
-                background: linear-gradient(135deg, #16a34a, #15803d);
+            .form-control {
+                direction: rtl;
+                text-align: right;
             }
 
-            .custom-toast.error {
-                background: linear-gradient(135deg, #dc2626, #b91c1c);
-            }
-
-            .custom-toast.info {
-                background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            }
-
-            @@keyframes fadeSlide {
-                from { opacity: 0; transform: translateY(-10px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
+                .form-control::placeholder {
+                    color: #94a3b8;
+                    opacity: 1;
+                }
     </style>
 </head>
 <body>
     <header>
-        <nav class="navbar navbar-expand-sm navbar-dark main-navbar mb-4">
-            <div class="container-fluid px-4">
-                <a class="navbar-brand" asp-controller="Home" asp-action="Index">نظام إدارة الملفات</a>
+        <nav class="navbar navbar-expand-lg main-navbar">
+            <div class="container-fluid px-3 px-md-4">
+                <a class="navbar-brand" asp-controller="Home" asp-action="Index">Excel Pro Manager</a>
 
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse">
+                <button class="navbar-toggler bg-light" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
                     <span class="navbar-toggler-icon"></span>
                 </button>
 
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav me-auto"></ul>
-
-                    <ul class="navbar-nav align-items-center">
-                        @if (SignInManager.IsSignedIn(User))
-                        {
-                            <li class="nav-item">
-                                <span class="user-badge">
-                                    @User.Identity?.Name
-                                    @if (User.IsInRole("Admin"))
-                                    {
-                                        <span> - مدير</span>
-                                    }
-                                </span>
-                            </li>
-                            <li class="nav-item">
-                                <form class="d-inline" asp-area="Identity" asp-page="/Account/Logout" asp-route-returnUrl="/Identity/Account/Login" method="post">
-                                    @Html.AntiForgeryToken()
-                                    <button type="submit" class="btn btn-light logout-btn">تسجيل خروج</button>
-                                </form>
-                            </li>
-                        }
+                <div class="collapse navbar-collapse" id="mainNav">
+                    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                        <li class="nav-item">
+                            <a class="nav-link" asp-controller="Home" asp-action="Index">الرئيسية</a>
+                        </li>
                     </ul>
+
+                    <partial name="_LoginPartial" />
                 </div>
             </div>
         </nav>
     </header>
 
-    <div class="toast-container-custom">
-        @if (TempData["ToastMessage"] != null)
-        {
-            var toastType = TempData["ToastType"]?.ToString() ?? "info";
-            <div class="custom-toast @toastType" id="mainToast">
-                @TempData["ToastMessage"]
-            </div>
-        }
-    </div>
-
-    <div class="container-fluid">
-        <main role="main" class="pb-4">
+    <main>
+        <div class="main-page-wrapper">
             @RenderBody()
-        </main>
-    </div>
+        </div>
+    </main>
+
+    <footer>
+        نظام احترافي لإدارة ملفات Excel و CSV
+    </footer>
 
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-            setTimeout(function () {
-                const toast = document.getElementById("mainToast");
-                if (toast) {
-                    toast.style.opacity = "0";
-                    setTimeout(() => toast.remove(), 300);
-                }
-            }, 3000);
-    </script>
-
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

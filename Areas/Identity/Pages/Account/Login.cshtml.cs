@@ -1,22 +1,26 @@
 using System.ComponentModel.DataAnnotations;
-using Microsoft.AspNetCore.Authorization;
+using Abdullhak_Khalaf.Models;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 
 namespace Abdullhak_Khalaf.Areas.Identity.Pages.Account
 {
-    [AllowAnonymous]
     public class LoginModel : PageModel
     {
-        private readonly SignInManager<IdentityUser> _signInManager;
+        private readonly SignInManager<ApplicationUser> _signInManager;
+        private readonly UserManager<ApplicationUser> _userManager;
         private readonly ILogger<LoginModel> _logger;
 
-        public LoginModel(SignInManager<IdentityUser> signInManager, ILogger<LoginModel> logger)
+        public LoginModel(
+            SignInManager<ApplicationUser> signInManager,
+            UserManager<ApplicationUser> userManager,
+            ILogger<LoginModel> logger)
         {
             _signInManager = signInManager;
+            _userManager = userManager;
             _logger = logger;
         }
 
@@ -27,74 +31,89 @@ namespace Abdullhak_Khalaf.Areas.Identity.Pages.Account
 
         public string? ReturnUrl { get; set; }
 
+        [TempData]
+        public string? ErrorMessage { get; set; }
+
         public class InputModel
         {
-            [Required(ErrorMessage = "البريد الإلكتروني مطلوب")]
-            [EmailAddress(ErrorMessage = "البريد الإلكتروني غير صحيح")]
-            public string Email { get; set; } = string.Empty;
+            [Required]
+            public string Login { get; set; } = string.Empty;
 
-            [Required(ErrorMessage = "كلمة المرور مطلوبة")]
+            [Required]
             [DataType(DataType.Password)]
             public string Password { get; set; } = string.Empty;
 
-            [Display(Name = "تذكرني؟")]
-            public bool RememberMe { get; set; }
+            public bool RememberMe { get; set; } = true;
         }
 
         public async Task OnGetAsync(string? returnUrl = null)
         {
             if (!string.IsNullOrEmpty(ErrorMessage))
-            {
                 ModelState.AddModelError(string.Empty, ErrorMessage);
-            }
 
-            returnUrl ??= Url.Content("~/Home/Index");
+            returnUrl ??= Url.Content("~/");
 
             await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
-
             ExternalLogins = (await _signInManager.GetExternalAuthenticationSchemesAsync()).ToList();
-
             ReturnUrl = returnUrl;
         }
 
-        [TempData]
-        public string? ErrorMessage { get; set; }
-
         public async Task<IActionResult> OnPostAsync(string? returnUrl = null)
         {
-            returnUrl ??= Url.Content("~/Home/Index");
-
+            returnUrl ??= Url.Content("~/");
             ExternalLogins = (await _signInManager.GetExternalAuthenticationSchemesAsync()).ToList();
 
             if (!ModelState.IsValid)
-            {
                 return Page();
+
+            ApplicationUser? user = null;
+
+            if (Input.Login.Contains("@"))
+            {
+                var normalizedEmail = _userManager.NormalizeEmail(Input.Login);
+
+                var usersByEmail = await _userManager.Users
+                    .Where(u => u.NormalizedEmail == normalizedEmail)
+                    .OrderBy(u => u.Id)
+                    .ToListAsync();
+
+                if (usersByEmail.Count == 0)
+                {
+                    ModelState.AddModelError(string.Empty, "بيانات الدخول غير صحيحة.");
+                    return Page();
+                }
+
+                if (usersByEmail.Count > 1)
+                {
+                    ModelState.AddModelError(string.Empty, "يوجد أكثر من حساب بنفس البريد الإلكتروني. استخدم اسم المستخدم أو اطلب من المدير حل المشكلة.");
+                    return Page();
+                }
+
+                user = usersByEmail.First();
+            }
+            else
+            {
+                user = await _userManager.FindByNameAsync(Input.Login);
+                if (user == null)
+                {
+                    ModelState.AddModelError(string.Empty, "بيانات الدخول غير صحيحة.");
+                    return Page();
+                }
             }
 
             var result = await _signInManager.PasswordSignInAsync(
-                Input.Email,
+                user.UserName!,
                 Input.Password,
                 Input.RememberMe,
                 lockoutOnFailure: false);
 
             if (result.Succeeded)
             {
-                _logger.LogInformation("تم تسجيل الدخول.");
+                _logger.LogInformation("User logged in.");
                 return LocalRedirect(returnUrl);
             }
 
-            if (result.RequiresTwoFactor)
-            {
-                return RedirectToPage("./LoginWith2fa", new { ReturnUrl = returnUrl, RememberMe = Input.RememberMe });
-            }
-
-            if (result.IsLockedOut)
-            {
-                _logger.LogWarning("تم قفل الحساب.");
-                return RedirectToPage("./Lockout");
-            }
-
-            ModelState.AddModelError(string.Empty, "محاولة تسجيل دخول غير صحيحة.");
+            ModelState.AddModelError(string.Empty, "بيانات الدخول غير صحيحة.");
             return Page();
         }
     }

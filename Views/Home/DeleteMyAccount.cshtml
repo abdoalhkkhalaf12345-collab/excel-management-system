@@ -1,0 +1,134 @@
+﻿@model Abdullhak_Khalaf.Models.DeleteAccountViewModel
+
+@{
+    ViewData["Title"] = "حذف حسابي";
+}
+
+<div class="delete-account-page">
+    <div class="delete-card">
+        <div class="warning-icon">⚠️</div>
+        <h1>حذف الحساب</h1>
+        <p class="warning-text">
+            هذا الإجراء نهائي وسيؤدي إلى حذف:
+        </p>
+
+        <ul class="danger-list">
+            <li>الحساب بالكامل</li>
+            <li>جميع ملفاتك المرفوعة</li>
+            <li>جميع النسخ المحفوظة لملفاتك</li>
+            <li>سجل تعديلاتك داخل النظام</li>
+        </ul>
+
+        <p class="final-warning">
+            لا يمكن التراجع عن هذه العملية بعد التنفيذ.
+        </p>
+
+        <form method="post" asp-controller="Home" asp-action="DeleteMyAccount">
+            @Html.AntiForgeryToken()
+
+            <div asp-validation-summary="All" class="text-danger mb-3"></div>
+
+            <div class="form-group mb-4">
+                <label asp-for="Password" class="form-label">أدخل كلمة المرور للتأكيد</label>
+                <input asp-for="Password" class="form-control premium-input" type="password" />
+                <span asp-validation-for="Password" class="text-danger"></span>
+            </div>
+
+            <div class="action-row">
+                <a asp-controller="Home" asp-action="Index" class="btn btn-outline-light modern-btn">إلغاء</a>
+                <button type="submit" class="btn btn-danger modern-btn">تأكيد حذف الحساب</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
+
+<style>
+    .delete-account-page {
+        min-height: 70vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+    }
+
+    .delete-card {
+        width: 100%;
+        max-width: 760px;
+        background: rgba(15,23,42,.88);
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 24px;
+        padding: 34px;
+        box-shadow: 0 20px 40px rgba(0,0,0,.24);
+        color: #e2e8f0;
+        text-align: center;
+    }
+
+    .warning-icon {
+        font-size: 54px;
+        margin-bottom: 14px;
+    }
+
+    .delete-card h1 {
+        color: #f8fafc;
+        font-size: 40px;
+        font-weight: 800;
+        margin-bottom: 14px;
+    }
+
+    .warning-text,
+    .final-warning {
+        color: #cbd5e1;
+        font-size: 17px;
+    }
+
+    .danger-list {
+        text-align: right;
+        width: fit-content;
+        margin: 20px auto;
+        color: #fecaca;
+        font-size: 16px;
+        line-height: 2;
+    }
+
+    .form-label {
+        display: block;
+        text-align: right;
+        color: #f8fafc;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .premium-input {
+        background: #0f172a;
+        color: #f8fafc;
+        border: 1px solid rgba(255,255,255,.10);
+        min-height: 52px;
+        border-radius: 14px;
+        padding-inline: 14px;
+    }
+
+        .premium-input:focus {
+            background: #111827;
+            color: #fff;
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 0.2rem rgba(96,165,250,.12);
+        }
+
+    .action-row {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .modern-btn {
+        border-radius: 12px;
+        padding: 10px 22px;
+        font-weight: 700;
+        min-width: 170px;
+    }
+</style>

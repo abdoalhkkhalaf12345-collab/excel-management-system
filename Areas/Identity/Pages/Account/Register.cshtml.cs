@@ -1,39 +1,24 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Threading.Tasks;
+using Abdullhak_Khalaf.Models;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
-using Abdullhak_Khalaf.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Logging;
 
 namespace Abdullhak_Khalaf.Areas.Identity.Pages.Account
 {
-    [AllowAnonymous]
     public class RegisterModel : PageModel
     {
-        private readonly SignInManager<IdentityUser> _signInManager;
-        private readonly UserManager<IdentityUser> _userManager;
-        private readonly IUserStore<IdentityUser> _userStore;
-        private readonly IUserEmailStore<IdentityUser> _emailStore;
+        private readonly SignInManager<ApplicationUser> _signInManager;
+        private readonly UserManager<ApplicationUser> _userManager;
         private readonly ILogger<RegisterModel> _logger;
 
         public RegisterModel(
-            UserManager<IdentityUser> userManager,
-            IUserStore<IdentityUser> userStore,
-            SignInManager<IdentityUser> signInManager,
+            UserManager<ApplicationUser> userManager,
+            SignInManager<ApplicationUser> signInManager,
             ILogger<RegisterModel> logger)
         {
             _userManager = userManager;
-            _userStore = userStore;
-            _emailStore = GetEmailStore();
             _signInManager = signInManager;
             _logger = logger;
         }
@@ -47,18 +32,23 @@ namespace Abdullhak_Khalaf.Areas.Identity.Pages.Account
 
         public class InputModel
         {
-            [Required(ErrorMessage = "البريد الإلكتروني مطلوب")]
-            [EmailAddress(ErrorMessage = "البريد الإلكتروني غير صحيح")]
+            [Required]
+            public string FullName { get; set; } = string.Empty;
+
+            [Required]
+            public string UserName { get; set; } = string.Empty;
+
+            [Required]
+            [EmailAddress]
             public string Email { get; set; } = string.Empty;
 
-            [Required(ErrorMessage = "كلمة المرور مطلوبة")]
-            [StringLength(100, ErrorMessage = "يجب أن تكون كلمة المرور على الأقل {2} أحرف.", MinimumLength = 4)]
+            [Required]
+            [StringLength(100, MinimumLength = 4)]
             [DataType(DataType.Password)]
             public string Password { get; set; } = string.Empty;
 
             [DataType(DataType.Password)]
-            [Display(Name = "تأكيد كلمة المرور")]
-            [Compare("Password", ErrorMessage = "كلمة المرور وتأكيدها غير متطابقين.")]
+            [Compare("Password", ErrorMessage = "كلمتا المرور غير متطابقتين.")]
             public string ConfirmPassword { get; set; } = string.Empty;
         }
 
@@ -70,57 +60,41 @@ namespace Abdullhak_Khalaf.Areas.Identity.Pages.Account
 
         public async Task<IActionResult> OnPostAsync(string? returnUrl = null)
         {
-            returnUrl ??= Url.Content("~/Home/Index");
+            returnUrl ??= Url.Content("~/");
             ExternalLogins = (await _signInManager.GetExternalAuthenticationSchemesAsync()).ToList();
 
             if (!ModelState.IsValid)
+                return Page();
+
+            var existingUserName = await _userManager.FindByNameAsync(Input.UserName);
+            if (existingUserName != null)
             {
+                ModelState.AddModelError(string.Empty, "اسم المستخدم مستخدم مسبقًا.");
                 return Page();
             }
 
-            var user = CreateUser();
-
-            await _userStore.SetUserNameAsync(user, Input.Email, CancellationToken.None);
-            await _emailStore.SetEmailAsync(user, Input.Email, CancellationToken.None);
+            var user = new ApplicationUser
+            {
+                FullName = Input.FullName,
+                UserName = Input.UserName,
+                Email = Input.Email,
+                EmailConfirmed = true
+            };
 
             var result = await _userManager.CreateAsync(user, Input.Password);
 
             if (result.Succeeded)
             {
-                _logger.LogInformation("تم إنشاء حساب جديد.");
-
-                await _signInManager.SignInAsync(user, isPersistent: false);
-
+                await _userManager.AddToRoleAsync(user, "User");
+                _logger.LogInformation("User created a new account.");
+                await _signInManager.SignInAsync(user, isPersistent: true);
                 return LocalRedirect(returnUrl);
             }
 
             foreach (var error in result.Errors)
-            {
                 ModelState.AddModelError(string.Empty, error.Description);
-            }
 
             return Page();
-        }
-
-        private IdentityUser CreateUser()
-        {
-            try
-            {
-                return Activator.CreateInstance<IdentityUser>();
-            }
-            catch
-            {
-                throw new InvalidOperationException($"لا يمكن إنشاء مثيل من '{nameof(IdentityUser)}'.");
-            }
-        }
-
-        private IUserEmailStore<IdentityUser> GetEmailStore()
-        {
-            if (!_userManager.SupportsUserEmail)
-            {
-                throw new NotSupportedException("التطبيق يحتاج إلى User Store يدعم البريد الإلكتروني.");
-            }
-            return (IUserEmailStore<IdentityUser>)_userStore;
         }
     }
 }

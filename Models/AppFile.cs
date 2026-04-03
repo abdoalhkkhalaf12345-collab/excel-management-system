@@ -17,10 +17,21 @@ namespace Abdullhak_Khalaf.Models
         public string OwnerUserId { get; set; } = string.Empty;
 
         [Required]
-        public string FileType { get; set; } = string.Empty; // xlsx / xls / csv
+        public string OwnerEmail { get; set; } = string.Empty;
+
+        [Required]
+        public string OwnerUserName { get; set; } = string.Empty;
+
+        [Required]
+        public string OwnerFullName { get; set; } = string.Empty;
+
+        [Required]
+        public string FileType { get; set; } = string.Empty; // xlsx / csv
 
         public long FileSizeBytes { get; set; }
 
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+
+        public DateTime? LastModifiedAt { get; set; }
     }
 }

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -21,6 +21,8 @@
 		</PackageReference>
 		<PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="10.0.2" />
 		<PackageReference Include="QuestPDF" Version="2026.2.4" />
+		<PackageReference Include="Syncfusion.EJ2.AspNet.Core" Version="33.1.46" />
+		<PackageReference Include="Syncfusion.EJ2.Spreadsheet.AspNet.Core" Version="33.1.46" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -1,10 +1,14 @@
-﻿using System.Collections.Generic;
+﻿using System;
 
 namespace Abdullhak_Khalaf.Models
 {
     public class ExcelFileViewModel
     {
-        public string FileName { get; set; } = string.Empty;
-        public List<List<string>> Rows { get; set; } = new List<List<string>>();
+        public int Id { get; set; }
+        public string OriginalFileName { get; set; } = string.Empty;
+        public string FileType { get; set; } = string.Empty;
+        public long FileSizeBytes { get; set; }
+        public DateTime UploadedAt { get; set; }
+        public string OwnerEmail { get; set; } = string.Empty;
     }
 }
